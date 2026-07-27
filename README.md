@@ -1,1 +1,2 @@
-# GBE-genesis
+# GBE-genesis software program   
+  add projet introduction
