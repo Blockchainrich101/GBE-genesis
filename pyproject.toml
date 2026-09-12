@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Global Base Electronics Genesis platform"
 requires-python = ">=3.12"
 dependencies = [
+  "httpx>=0.28,<1.0",
   "fastapi>=0.116,<1.0",
   "uvicorn[standard]>=0.35,<1.0",
   "sqlalchemy>=2.0,<3.0",
@@ -26,3 +27,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+

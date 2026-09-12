@@ -2,7 +2,7 @@
 
 Use the phase1-minimum-gie-core branch. The main branch is an architecture baseline.
 
-This implementation starts a local web interface, checks storage readiness and processes one validated diagnostic request into SQLite. It does not implement AI reasoning, autonomous agents, research, email, recursive improvement or the complete GIE architecture.
+This implementation starts a local web interface, checks storage readiness and processes one validated diagnostic request into SQLite. It also supports supervised drafting with an installed local Ollama model. Autonomous tool execution, research, email, recursive improvement and the complete GIE architecture remain unimplemented.
 
 ## Windows setup
 
@@ -39,3 +39,25 @@ python3.12 -m venv .venv
 ## Verification
 
 Run python -m pytest inside the installed environment. Tests cover readiness, persistent completion, rejected input and storage failures. CI runs these checks on Linux and Windows.
+
+
+## Offline drafting agent (Windows)
+
+Install Ollama from https://ollama.com/download/windows. Before starting Ollama, set the user environment variable OLLAMA_NO_CLOUD=1 and fully quit/restart Ollama. This disables cloud models and web search (https://docs.ollama.com/faq). The app itself connects only to 127.0.0.1:11434 with no proxy, redirect or cloud fallback. Server-side cloud disabling is required as model-name checks alone cannot verify custom aliases.
+
+In PowerShell, download a modest example model (hardware suitability and speed must be checked on your computer):
+
+```powershell
+ollama pull qwen2.5:3b
+$env:GBE_LOCAL_MODEL="qwen2.5:3b"
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.venv\Scripts\python.exe -m app
+```
+
+Open http://127.0.0.1:8000, select Offline agent draft, enter a task and run it. Example: Draft a five-step manual startup test plan for GBE. The output is marked REVIEW REQUIRED and saved locally. The model download needs internet; inference can run offline afterward. Model reference: https://ollama.com/library/qwen2.5:3b.
+
+The selected model variable above applies to this PowerShell session. To use the double-click launcher, also set GBE_LOCAL_MODEL in Windows user environment variables and reopen the launcher.
+
+Each request is user initiated. The agent has no tools, file access, email, browser or shell capability. Draft text is not executed. Model requests have a 90-second overall deadline and a 1024-token output limit; only one draft runs per application process. Run a single server worker. A timed-out model may continue computing inside Ollama briefly; this app does not claim to terminate Ollama's process. Health readiness reports the diagnostic/storage service, not model availability. Missing model configuration is reported when a draft is requested.
+
+Verification: 14 tests pass with mocked model responses, including missing configuration, rejected cloud model names, connection failures, timeouts, invalid responses and saved drafts. Real model inference and Windows startup have not been verified here. Earlier CI attempts stopped before executing test steps.
