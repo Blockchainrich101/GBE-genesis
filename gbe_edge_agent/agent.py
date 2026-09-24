@@ -1,15 +1,12 @@
 """Local, bounded agent queue; optional OpenAI-compatible local inference endpoint."""
 import argparse
 import json
-import os
 import sqlite3
-import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS jobs (
  id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
@@ -17,12 +14,17 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS jobs (
  attempts INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0,
  lease_until REAL, result TEXT, last_error TEXT, created_at TEXT NOT NULL
 )"""
+WORKER_SCHEMA = """CREATE TABLE IF NOT EXISTS worker_health (
+ id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL,
+ heartbeat_at REAL NOT NULL, processed INTEGER NOT NULL DEFAULT 0
+)"""
 
 
 def connect(db):
     conn = sqlite3.connect(db, timeout=10, isolation_level=None)
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute(SCHEMA)
+    conn.execute(WORKER_SCHEMA)
     return conn
 
 
@@ -85,6 +87,48 @@ def work_once(conn, endpoint, model):
     return job_id
 
 
+def heartbeat(conn, state, processed):
+    conn.execute('INSERT INTO worker_health(id,state,heartbeat_at,processed) VALUES(1,?,?,?) '
+                 'ON CONFLICT(id) DO UPDATE SET state=excluded.state,heartbeat_at=excluded.heartbeat_at,processed=excluded.processed',
+                 (state,time.time(),processed))
+
+
+def health(conn, now=None, stale_after=15):
+    now = time.time() if now is None else now
+    row = conn.execute('SELECT state,heartbeat_at,processed FROM worker_health WHERE id=1').fetchone()
+    counts = dict(conn.execute('SELECT state,count(*) FROM jobs GROUP BY state'))
+    if row is None:
+        return {'worker':'never_started','heartbeat_age_seconds':None,'processed':0,'jobs':counts}
+    state, last, processed = row
+    age = max(0,now-last)
+    return {'worker': 'stale' if state=='running' and age>stale_after else state,
+            'heartbeat_age_seconds':round(age,1),'processed':processed,'jobs':counts}
+
+
+def run(conn, endpoint, model, poll=2, max_jobs=None, stop=None):
+    if not 0.1 <= poll <= 60:
+        raise ValueError('poll must be 0.1..60 seconds')
+    processed = 0
+    heartbeat(conn,'running',processed)
+    try:
+        while stop is None or not stop.is_set():
+            job_id = work_once(conn,endpoint,model)
+            if job_id is not None:
+                processed += 1
+            heartbeat(conn,'running',processed)
+            if max_jobs is not None and processed >= max_jobs:
+                break
+            if stop is not None:
+                stop.wait(poll)
+            else:
+                time.sleep(poll)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        heartbeat(conn,'stopped',processed)
+    return processed
+
+
 def main():
     parser=argparse.ArgumentParser(description='GBE local edge agent')
     parser.add_argument('--db', default='agent.sqlite3')
@@ -92,13 +136,18 @@ def main():
     parser.add_argument('--model', default='local-model')
     sub=parser.add_subparsers(dest='command',required=True)
     add=sub.add_parser('add'); add.add_argument('prompt'); add.add_argument('--key', required=True)
-    sub.add_parser('once'); sub.add_parser('status')
+    sub.add_parser('once'); sub.add_parser('status'); sub.add_parser('health')
+    worker=sub.add_parser('run'); worker.add_argument('--poll',type=float,default=2)
     args=parser.parse_args()
     with connect(args.db) as conn:
         if args.command=='add':
             print(json.dumps(dict(zip(('id','state'),enqueue(conn,args.prompt,args.key)))))
         elif args.command=='once':
             print(json.dumps({'processed':work_once(conn,args.endpoint,args.model)}))
+        elif args.command=='run':
+            run(conn,args.endpoint,args.model,args.poll)
+        elif args.command=='health':
+            print(json.dumps(health(conn)))
         else:
             rows=conn.execute('SELECT id,state,attempts,result,last_error FROM jobs ORDER BY created_at,id').fetchall()
             print(json.dumps([dict(zip(('id','state','attempts','result','last_error'),row)) for row in rows]))
