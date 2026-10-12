@@ -17,4 +17,4 @@ jobs:
           python-version: '3.12'
       - name: Run NCR unit tests
         working-directory: gbe-genesis-engine/modules/neural-civilization-rebuilder
-        run: python -m unittest -v test_ncr.py
+        run: python -m unittest -v test_ncr.py test_receipt.py
